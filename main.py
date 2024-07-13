@@ -1,61 +1,95 @@
 from scapy.all import sniff
 from scapy.layers.l2 import Ether
-from scapy.layers.inet import TCP, IP
+from scapy.layers.inet import TCP, IP, UDP
 from pathlib import Path
 from datetime import datetime
+import json
 
+
+
+flows = {}
 
 
 
 def create_flow(pkt: Ether):
-    # print(ether.sent_time)
-    # print(ether.fragment())
-    # print(ether.summary())
-    # print(ether.type)
-    # print(ether.sent_time)
-    # print(list(ether))
-    # print('================')
-    # print(ether.layers())
-    # print(dir(ether.payload))
-
-    flow_info = {}
-    # print(str(pkt))
-    # Check if the packet is a TCP packet
-    if pkt.haslayer('TCP'):
-        flow_info['time'] = pkt.time  # Timestamp of the packet capture
-        flow_info['src_ip'] = pkt[IP].src  # Source IP address
-        flow_info['dst_ip'] = pkt[IP].dst  # Destination IP address
-        flow_info['src_port'] = pkt[TCP].sport  # Source port number
-        flow_info['dst_port'] = pkt[TCP].dport  # Destination port number
-        flow_info['flags'] = pkt[TCP].flags  # TCP flags (e.g., SYN, ACK, FIN)
-        flow_info['len'] = len(pkt[IP])
-    # print(flow_info)
-    # print(datetime.fromtimestamp(int(pkt.time.to_integral_value())))
-    # if pkt.haslayer('Raw'):  # Assuming the payload is a raw layer
-    #     return len(pkt[Raw])
-    # print(len(pkt[TCP]))
-
-    # print(pkt.display())
-
-    # display
-    # len
-
-    # for i in dir(pkt):
-    #     if not i.startswith('_'):
-    #         print('=================')
-    #         if callable(eval(f'pkt.{i}')):
-    #             try:
-    #                 print(f'{i}(): {eval(f'pkt.{i}()')}')
-    #             except Exception as e:
-    #                 print(f'{i}: except:')
-    #                 print(e)
-    #         else:
-    #             print(f'{i}: {eval(f'pkt.{i}')}')
+    if pkt.haslayer('IP'):
+        if pkt.haslayer('UDP'):
+            src_addr = str(pkt[IP].src) + str(pkt[UDP].sport)
+            dst_addr = str(pkt[IP].dst) + str(pkt[UDP].dport)
+            key = (src_addr, dst_addr, 'UDP')
+            rev_key = (dst_addr, src_addr, 'UDP')
+            if key in flows:
+                flows[key].append(pkt)
+            elif rev_key in flows:
+                flows[rev_key].append(pkt)
+            else:
+                flows[key] = [pkt]
+        elif pkt.haslayer('TCP'):
+            src_addr = str(pkt[IP].src) + str(pkt[TCP].sport)
+            dst_addr = str(pkt[IP].dst) + str(pkt[TCP].dport)
+            key = (src_addr, dst_addr, 'TCP')
+            rev_key = (dst_addr, src_addr, 'UDP')
+            if key in flows:
+                flows[key].append(pkt)
+            elif rev_key in flows:
+                flows[rev_key].append(pkt)
+            else:
+                flows[key] = [pkt]
 
 
-    return flow_info
 
 base_dir = Path()
 pcap_file = base_dir.joinpath('test.pcap')
 
-sniff(offline=str(pcap_file), prn=create_flow, count=1, filter='tcp')
+s = sniff(offline=str(pcap_file), prn=create_flow, count=10000)
+
+
+
+
+for key, val in flows.copy().items():
+    if len(val) <= 2 and key[2] == 'TCP':  # TCP hand shake
+        flows.pop(key)
+    else:
+        val.sort(key=lambda x: x.time)
+        previous_index = 0
+        previous = val[0]
+        for pkt in val[1:]:
+            if previous.haslayer('IP') and pkt.time - previous.time > previous[IP].ttl:
+                i = val.index(pkt)
+                flows.pop(key)
+                key = list(key)
+                key.append(int(val[previous_index].time.to_integral_value()))
+                key = tuple(key)
+                flows[key] = val[previous_index:i]
+                previous_index = i
+                key = list(key)
+                key.append(int(pkt.time.to_integral_value()))
+                key = tuple(key)
+                flows[key] = val[i:]
+            previous = pkt
+
+flows2 = {}
+max_c = 0
+for key, val in flows.copy().items():
+    pkts = []
+    for pkt in val:
+        pkts.append(str(datetime.fromtimestamp(int(pkt.time.to_integral_value()))))
+    flows2[str(key)] = pkts
+    if len(val) > max_c:
+        max_c = len(val)
+
+with open('res.json', 'w') as f:
+    json.dump(flows2, f)
+
+
+# print(flows)
+print(len(flows), max_c)
+
+
+
+#tcp con lost del
+#udp loc ip loc port rem ip rem port protocol -> udp flow
+# tuple start time end time difrence time pkt count in flow totall bite
+
+
+
